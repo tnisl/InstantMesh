@@ -130,28 +130,52 @@ def preprocess(input_image, do_remove_background):
 
     return input_image
 
-
 def generate_mvs(input_image, sample_steps, sample_seed):
-
+    print("[generate_mvs] start")
     seed_everything(sample_seed)
-    
-    # sampling
-    generator = torch.Generator(device=device0)
-    z123_image = pipeline(
-        input_image, 
-        num_inference_steps=sample_steps, 
-        generator=generator,
-    ).images[0]
 
-    #show_image = np.asarray(z123_image, dtype=np.uint8)
-    show_image = np.asarray(z123_image, dtype=np.uint8).copy()
-    show_image = torch.from_numpy(show_image)     # (960, 640, 3)
-    show_image = rearrange(show_image, '(n h) (m w) c -> (n m) h w c', n=3, m=2)
-    show_image = rearrange(show_image, '(n m) h w c -> (n h) (m w) c', n=2, m=3)
-    show_image = Image.fromarray(show_image.numpy())
+    try:
+        generator = torch.Generator(device=device0).manual_seed(int(sample_seed))
 
-    return z123_image, show_image
+        z123_image = pipeline(
+            input_image,
+            num_inference_steps=int(sample_steps),
+            generator=generator,
+        ).images[0]
 
+        print("[generate_mvs] raw z123 image:", z123_image.size, z123_image.mode)
+
+        # Convert PIL -> writable numpy array
+        show_np = np.array(z123_image.convert("RGB"), dtype=np.uint8, copy=True)
+        print("[generate_mvs] numpy:", show_np.shape, show_np.dtype)
+
+        # Expected shape: 960 x 640 x 3 = 3 rows x 2 cols of 320x320 views
+        h, w, c = show_np.shape
+        assert h % 3 == 0 and w % 2 == 0, f"Unexpected multiview shape: {show_np.shape}"
+
+        view_h = h // 3
+        view_w = w // 2
+
+        # Split 3x2 grid -> 6 views
+        views = show_np.reshape(3, view_h, 2, view_w, c)
+        views = views.transpose(0, 2, 1, 3, 4)
+        views = views.reshape(6, view_h, view_w, c)
+
+        # Re-layout 6 views as 2 rows x 3 cols for display
+        show_np = views.reshape(2, 3, view_h, view_w, c)
+        show_np = show_np.transpose(0, 2, 1, 3, 4)
+        show_np = show_np.reshape(2 * view_h, 3 * view_w, c)
+
+        show_image = Image.fromarray(show_np)
+
+        print("[generate_mvs] done:", show_image.size, show_image.mode)
+        return z123_image, show_image
+
+    except Exception as e:
+        import traceback
+        print("[generate_mvs] ERROR:")
+        traceback.print_exc()
+        raise gr.Error(f"Multi-view generation failed: {str(e)}")
 
 def make_mesh(mesh_fpath, planes):
 
